@@ -13,11 +13,13 @@
  *               whatever their era
  *   the gate    doesn't fall quiet when Nokhor dies. That assault pays out, the Kaldorei line is
  *               brought back up to strength and the swarm comes again, until the time is up
- *   the hives   mod-individual-progression keeps its own war (the three Colossi, the crystal
- *               camps of Silithus and Darkshore, the Anubisath and Rajaxx at the gate) in a phase
- *               that only characters between the gong and Chaos and Destruction are in. For the
- *               war everyone is put in that phase, in the areas where IP does it, so the
- *               ringer's friends can see and fight what the ringer still has to kill
+ *   the hives   mod-individual-progression keeps its own war (the three Colossi, the Anubisath
+ *               camps of Silithus and Darkshore, a Qiraji Destroyer and its Warbringers at the
+ *               gate) in a phase that only characters between the gong and Chaos and
+ *               Destruction are in. For the war everyone is put in that phase, in the areas
+ *               where IP does it, so the ringer's friends can see and fight what the ringer
+ *               still has to kill. The crystal formations in those camps IP shows by script,
+ *               not by phase: they stay with the characters of the era
  *
  * With RealmWideMinutes at 0 the gong starts a plain run for its era, as it used to.
  *
@@ -79,7 +81,7 @@ namespace EraEvents
 
         // Where mod-individual-progression phases a character of the war's era into its outdoor
         // war (IndividualProgression::checkIPPhasing): Silithus, the Scarab Wall and Dais and the
-        // three hives, and the parts of Darkshore that hold its level 16 to 20 crystal camps.
+        // three hives, and the parts of Darkshore that hold its level 16 to 20 Anubisath camps.
         constexpr std::array<uint32, 10> IP_WAR_AREAS = { 1377, 2737, 2741, 2742, 2743, 2744, 148, 448, 454, 2077 };
 
         // Adds mod-individual-progression's phase for its outdoor AQ war (65536, the one its own
@@ -140,7 +142,7 @@ namespace EraEvents
             {
                 if (IsRealmWide())
                     return Acore::StringFormat("{} has rung the Scarab Gong. The Ahn'Qiraj War has begun! The swarm storms out of "
-                        "the Scarab Wall, the Colossi of the hives walk Silithus and Qiraji crystals break through in Darkshore. "
+                        "the Scarab Wall, the Colossi of the hives walk Silithus and Anubisath have risen in Darkshore. "
                         "Heroes of every era are called to arms.", GetInstigator().empty() ? "A champion" : GetInstigator());
 
                 return "The gates of Ahn'Qiraj are open and the swarm is pouring out! Hold the line at the Scarab Wall in Silithus.";
