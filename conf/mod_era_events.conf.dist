@@ -55,8 +55,20 @@ EraEvents.RetryMinutes = 5
 #
 #    Gates of Ahn'Qiraj (tier 4: the gong has been rung, the war isn't won yet)
 #        Waves of Qiraji storm out of the Scarab Wall against a Kaldorei line; the flashback's
-#        dragons join in, then Lieutenant General Nokhor. Also breaks out the moment anyone
-#        completes Bang a Gong!, with no minimum number of players. Rewards Cenarion Circle reputation.
+#        dragons join in, then Lieutenant General Nokhor. Rewards Cenarion Circle reputation.
+#
+#    EraEvents.AQWar.RealmWideMinutes
+#        The Ahn'Qiraj War. The moment anyone completes Bang a Gong! the event runs for this
+#        many minutes for the whole realm, with no notice and no minimum number of players:
+#          - everyone online is told who rang the gong;
+#          - whoever is in Silithus is in the battle at the Scarab Wall, whatever their era;
+#          - each time Nokhor falls, everyone there gets the reward, and after five minutes the
+#            swarm comes again, until the time is up;
+#          - everyone sees mod-individual-progression's own war as a character of that era does:
+#            the three Colossi and the crystal camps in Silithus and Darkshore.
+#        A second gong while it runs starts the time over. 0 = the gong starts a plain run for
+#        its era instead, DurationMinutes long.
+#        Default: 120
 #
 
 EraEvents.AQWar.Enable = 1
@@ -64,6 +76,7 @@ EraEvents.AQWar.IntervalMin = 120
 EraEvents.AQWar.IntervalMax = 240
 EraEvents.AQWar.WarningMinutes = 10
 EraEvents.AQWar.DurationMinutes = 45
+EraEvents.AQWar.RealmWideMinutes = 120
 EraEvents.AQWar.RewardGold = 20
 EraEvents.AQWar.RewardFaction = 609
 EraEvents.AQWar.RewardReputation = 250

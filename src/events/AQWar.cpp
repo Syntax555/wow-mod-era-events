@@ -5,8 +5,21 @@
  * Midway the three dragons of the flashback join in, one after another, and after the last wave
  * Lieutenant General Nokhor leads the final push. Kill him to win.
  *
- * Besides the schedule, the war also breaks out the moment anyone completes Bang a Gong!, with no
- * minimum number of players: that's the ringer's moment, and anyone else of the era can join.
+ * Besides the schedule there is the Ahn'Qiraj War: the moment anyone completes Bang a Gong!, the
+ * event runs realm-wide for two hours (EraEvents.AQWar.RealmWideMinutes). Vanilla's Ten Hour War,
+ * cut down to an evening:
+ *
+ *   everyone    is told who rang the gong, and whoever comes to Silithus is in the fight,
+ *               whatever their era
+ *   the gate    doesn't fall quiet when Nokhor dies. That assault pays out, the Kaldorei line is
+ *               brought back up to strength and the swarm comes again, until the time is up
+ *   the hives   mod-individual-progression keeps its own war (the three Colossi, the crystal
+ *               camps of Silithus and Darkshore, the Anubisath and Rajaxx at the gate) in a phase
+ *               that only characters between the gong and Chaos and Destruction are in. For the
+ *               war everyone is put in that phase, in the areas where IP does it, so the
+ *               ringer's friends can see and fight what the ringer still has to kill
+ *
+ * With RealmWideMinutes at 0 the gong starts a plain run for its era, as it used to.
  *
  * Released under the MIT License.
  */
@@ -23,6 +36,9 @@
 #include "ScriptedCreature.h"
 #include "StringFormat.h"
 #include "TemporarySummon.h"
+
+#include <algorithm>
+#include <array>
 
 namespace EraEvents
 {
@@ -61,6 +77,15 @@ namespace EraEvents
         constexpr uint32 MAP_KALIMDOR = 1;
         constexpr uint32 ZONE_SILITHUS = 1377;
 
+        // Where mod-individual-progression phases a character of the war's era into its outdoor
+        // war (IndividualProgression::checkIPPhasing): Silithus, the Scarab Wall and Dais and the
+        // three hives, and the parts of Darkshore that hold its level 16 to 20 crystal camps.
+        constexpr std::array<uint32, 10> IP_WAR_AREAS = { 1377, 2737, 2741, 2742, 2743, 2744, 148, 448, 454, 2077 };
+
+        // Adds mod-individual-progression's phase for its outdoor AQ war (65536, the one its own
+        // "Phase Shift: IPP" 89509 gives). A spell_dbc row from data/sql/db-world.
+        constexpr uint32 SPELL_PHASE_IP_AQ_WAR = 90124;
+
         // In front of the Scarab Wall, where the flashback of A Pawn on the Eternal Board is fought.
         Position const ANCHOR_POS  = { -8064.17f, 1534.23f, 2.61f, 3.14159f };
         Position const GATE_MOUTH  = { -8112.0f, 1524.0f, 2.70f, 0.0f };
@@ -72,6 +97,8 @@ namespace EraEvents
         constexpr uint32 FIRST_WAVE_MS = 15 * IN_MILLISECONDS;
         constexpr uint32 MAX_QIRAJI = 30;
         constexpr uint32 DEFENDERS = 12;
+        // The Ahn'Qiraj War: the quiet between Nokhor's death and the next assault's first wave.
+        constexpr uint32 LULL_MS = 5 * MINUTE * IN_MILLISECONDS;
 
         // The flashback's dragons: which wave brings each, and what they say and cast.
         struct Dragon
@@ -111,19 +138,50 @@ namespace EraEvents
 
             std::string GetStartText() const override
             {
+                if (IsRealmWide())
+                    return Acore::StringFormat("{} has rung the Scarab Gong. The Ahn'Qiraj War has begun! The swarm storms out of "
+                        "the Scarab Wall, the Colossi of the hives walk Silithus and Qiraji crystals break through in Darkshore. "
+                        "Heroes of every era are called to arms.", GetInstigator().empty() ? "A champion" : GetInstigator());
+
                 return "The gates of Ahn'Qiraj are open and the swarm is pouring out! Hold the line at the Scarab Wall in Silithus.";
             }
 
             std::string GetEndText(bool won) const override
             {
+                if (IsRealmWide())
+                {
+                    std::string broken = "No assault was broken";
+                    if (_assaultsBroken == 1)
+                        broken = "One assault was broken";
+                    else if (_assaultsBroken)
+                        broken = Acore::StringFormat("{} assaults were broken", _assaultsBroken);
+
+                    return Acore::StringFormat("The Ahn'Qiraj War is over. {} at the Scarab Wall, and the swarm draws back "
+                        "into Ahn'Qiraj.", broken);
+                }
+
                 return won
                     ? "Lieutenant General Nokhor has fallen and the swarm falls back behind the Scarab Wall. Silithus holds!"
                     : "The Qiraji have overrun the Kaldorei line and withdrawn into Ahn'Qiraj. They will come again.";
             }
 
+            std::string GetRewardText() const override
+            {
+                return "Lieutenant General Nokhor has fallen and the assault is broken. The swarm is gathering behind the "
+                    "Scarab Wall: it will come again.";
+            }
+
             bool IsEventArea(uint32 mapId, uint32 zoneId, uint32 /*areaId*/) const override
             {
                 return mapId == MAP_KALIMDOR && zoneId == ZONE_SILITHUS;
+            }
+
+            // The hives' side of the war, for everyone.
+            uint32 GetRealmWidePhaseSpell() const override { return SPELL_PHASE_IP_AQ_WAR; }
+
+            bool IsRealmWidePhaseArea(uint32 mapId, uint32 /*zoneId*/, uint32 areaId) const override
+            {
+                return mapId == MAP_KALIMDOR && std::find(IP_WAR_AREAS.begin(), IP_WAR_AREAS.end(), areaId) != IP_WAR_AREAS.end();
             }
 
             bool Start() override
@@ -134,20 +192,9 @@ namespace EraEvents
                 _wave = 0;
                 _waveTimer = FIRST_WAVE_MS;
                 _bossUp = false;
+                _assaultsBroken = 0;
 
-                // Two ranks of infantry across the front, facing the gate.
-                uint32 spawned = 0;
-                for (uint32 i = 0; i < DEFENDERS; ++i)
-                {
-                    float rank = (i % 2) ? 4.0f : 0.0f;
-                    float across = (float(i / 2) - float(DEFENDERS / 4)) * 3.5f;
-                    Position pos(FRONT_LINE.GetPositionX() + rank, FRONT_LINE.GetPositionY() + across,
-                        FRONT_LINE.GetPositionZ(), FRONT_LINE.GetOrientation());
-                    if (Summon(NPC_AQ_KALDOREI, pos))
-                        ++spawned;
-                }
-
-                return spawned > 0;
+                return Reinforce() > 0;
             }
 
             void Update(uint32 diff) override
@@ -163,6 +210,10 @@ namespace EraEvents
 
                 _waveTimer = WAVE_MS;
                 ++_wave;
+
+                // The Ahn'Qiraj War's later assaults meet a full line again.
+                if (_wave == 1 && _assaultsBroken)
+                    Reinforce();
 
                 if (_wave > WAVE_COUNT)
                 {
@@ -180,11 +231,43 @@ namespace EraEvents
 
             void OnSummonDied(ObjectGuid /*guid*/, uint32 entry) override
             {
-                if (entry == NPC_AQ_NOKHOR)
+                if (entry != NPC_AQ_NOKHOR)
+                    return;
+
+                if (!IsRealmWide())
+                {
                     MarkWon();
+                    return;
+                }
+
+                // The war goes on: this assault pays out and the next one gathers.
+                ++_assaultsBroken;
+                RewardNow();
+                _bossUp = false;
+                _wave = 0;
+                _waveTimer = LULL_MS;
             }
 
         private:
+            // Two ranks of infantry across the front, facing the gate. Fills the places of the
+            // fallen and returns how many it brought.
+            uint32 Reinforce()
+            {
+                uint32 standing = CountAlive(NPC_AQ_KALDOREI);
+                uint32 spawned = 0;
+                for (uint32 i = 0; i < DEFENDERS && standing + spawned < DEFENDERS; ++i)
+                {
+                    float rank = (i % 2) ? 4.0f : 0.0f;
+                    float across = (float(i / 2) - float(DEFENDERS / 4)) * 3.5f;
+                    Position pos(FRONT_LINE.GetPositionX() + rank, FRONT_LINE.GetPositionY() + across,
+                        FRONT_LINE.GetPositionZ(), FRONT_LINE.GetOrientation());
+                    if (Summon(NPC_AQ_KALDOREI, pos))
+                        ++spawned;
+                }
+
+                return spawned;
+            }
+
             void SpawnWave(uint32 wave)
             {
                 uint32 alive = 0;
@@ -229,6 +312,7 @@ namespace EraEvents
             uint32 _wave = 0;
             uint32 _waveTimer = 0;
             bool _bossUp = false;
+            uint32 _assaultsBroken = 0; // the Ahn'Qiraj War: times Nokhor has fallen
         };
     }
 
@@ -307,16 +391,20 @@ private:
     Dragon const* _dragon = nullptr;
 };
 
-// The gong starts the war on the spot.
+// The gong starts the Ahn'Qiraj War on the spot.
 class EraEventsAQPlayerScript : public PlayerScript
 {
 public:
     EraEventsAQPlayerScript() : PlayerScript("EraEventsAQPlayerScript", { PLAYERHOOK_ON_PLAYER_COMPLETE_QUEST }) { }
 
-    void OnPlayerCompleteQuest(Player* /*player*/, Quest const* quest) override
+    void OnPlayerCompleteQuest(Player* player, Quest const* quest) override
     {
-        if (quest && (quest->GetQuestId() == QUEST_BANG_A_GONG || quest->GetQuestId() == QUEST_SIMPLY_BANG_A_GONG))
-            RequestStart(EVENT_AQ_WAR);
+        if (!quest || (quest->GetQuestId() != QUEST_BANG_A_GONG && quest->GetQuestId() != QUEST_SIMPLY_BANG_A_GONG))
+            return;
+
+        // A playerbot that gets this far doesn't call the realm to war. A GM testing does.
+        if (IsRealPlayer(player) || player->IsGameMaster())
+            RequestRealmWideStart(EVENT_AQ_WAR, player->GetName());
     }
 };
 

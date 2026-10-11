@@ -14,6 +14,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class Creature;
@@ -78,6 +79,15 @@ namespace EraEvents
         // Whether a player standing here should be phased into the event.
         virtual bool IsEventArea(uint32 mapId, uint32 zoneId, uint32 areaId) const = 0;
 
+        // A realm-wide run is open to every era: whoever stands in the event's area is phased
+        // in whatever their tier, and everyone online is told. These are a second aura for such
+        // a run (0 for none) and where it is given.
+        virtual uint32 GetRealmWidePhaseSpell() const { return 0; }
+        virtual bool IsRealmWidePhaseArea(uint32 /*mapId*/, uint32 /*zoneId*/, uint32 /*areaId*/) const { return false; }
+
+        // Told to everyone phased in when the event pays out without ending (RewardNow).
+        virtual std::string GetRewardText() const { return std::string(); }
+
         // Spawns the event. Returns false if nothing could be spawned.
         virtual bool Start() = 0;
         virtual void Update(uint32 /*diff*/) { }
@@ -92,7 +102,12 @@ namespace EraEvents
         // Despawns everything the event spawned.
         void Stop();
 
+        // Set by the manager before Prepare and Start.
+        void SetRun(bool realmWide, std::string instigator);
+        bool IsRealmWide() const { return _realmWide; }
+
         bool IsWon() const { return _won; }
+        bool TakeRewardDue() { return std::exchange(_rewardDue, false); }
         bool IsSummon(ObjectGuid guid) const;
         bool IsObject(ObjectGuid guid) const;
         void Adopt(ObjectGuid guid) { _summons.push_back(guid); }
@@ -117,6 +132,12 @@ namespace EraEvents
         uint32 CountAlive(uint32 entry) const;
         void MarkWon() { _won = true; }
 
+        // Pays everyone phased in now. The event goes on.
+        void RewardNow() { _rewardDue = true; }
+
+        // Who set a realm-wide run off. Empty when nobody did.
+        std::string const& GetInstigator() const { return _instigator; }
+
         virtual void OnStop() { }
 
     private:
@@ -126,6 +147,9 @@ namespace EraEvents
         std::vector<ObjectGuid> _summons;
         std::vector<ObjectGuid> _objects;
         bool _won = false;
+        bool _rewardDue = false;
+        bool _realmWide = false;
+        std::string _instigator;
     };
 
     std::unique_ptr<EraEvent> CreateAQWarEvent();
@@ -151,6 +175,11 @@ namespace EraEvents
     // Starts an event now, skipping the interval and the player count. Safe from any map thread;
     // it happens on the next world update.
     void RequestStart(EventType type);
+
+    // The same, as a realm-wide run set off by instigator: open to every era, for the event's
+    // RealmWideMinutes. With that setting at 0 it is a plain RequestStart. A realm-wide run that
+    // is already going starts its time over.
+    void RequestRealmWideStart(EventType type, std::string instigator);
 }
 
 void AddEraEventMobScripts();
