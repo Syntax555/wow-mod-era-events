@@ -11,11 +11,15 @@
  * starts when enough real players at that tier are online (2 by default), so it's always something
  * you share. Playerbots at the tier are phased in too and fight alongside you.
  *
+ * The exception is a realm-wide run, which is for every era at once: whoever stands in the zone is
+ * phased in, and everyone online is told. The Scarab Gong starts one, the Ahn'Qiraj War.
+ *
  * Commands:
- *   .era next            what's coming up for your era
- *   .era list            (GM) every event and its state
- *   .era start <event>   (GM) start an event now: aq, si, legion, zombie
- *   .era stop <event>    (GM) end a running event
+ *   .era next                    what's coming up for your era
+ *   .era list                    (GM) every event and its state
+ *   .era start <event> [realm]   (GM) start an event now: aq, si, legion, zombie. With "realm" as
+ *                                a realm-wide run, for the events that have one
+ *   .era stop <event>            (GM) end a running event
  *
  * Released under the MIT License.
  */
@@ -66,6 +70,7 @@ namespace EraEvents
             uint32 intervalMax = 240;
             uint32 warning = 10;       // minutes of notice before it starts
             uint32 duration = 30;      // minutes before the event gives up
+            uint32 realmWide = 0;      // minutes a realm-wide run lasts, 0 = the event has none
             uint32 rewardGold = 0;     // copper
             uint32 rewardFaction = 0;
             int32 rewardReputation = 0;
@@ -225,6 +230,19 @@ namespace EraEvents
                 return cohort;
             }
 
+            // Who is told about a run: the event's era, or everyone when it is realm-wide.
+            std::vector<Player*> GetAudience(EraEvent const& event) const
+            {
+                if (!event.IsRealmWide())
+                    return GetCohort(event.GetTier(), false);
+
+                std::vector<Player*> audience;
+                for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+                    if (player && player->IsInWorld())
+                        audience.push_back(player);
+                return audience;
+            }
+
             void Update(uint32 diff)
             {
                 if (!_initialized)
@@ -265,19 +283,19 @@ namespace EraEvents
                         continue;
 
                     EraEvent const& event = *slot.event;
-                    bool want = slot.state == State::Running && tier == event.GetTier() &&
+                    bool running = slot.state == State::Running;
+                    bool want = running && (event.IsRealmWide() || tier == event.GetTier()) &&
                         event.IsEventArea(player->GetMapId(), zoneId, areaId);
-                    bool has = player->HasAura(event.GetPhaseSpell());
+                    SetAura(player, event.GetPhaseSpell(), want);
 
-                    if (want && !has)
-                        player->CastSpell(player, event.GetPhaseSpell(), true);
-                    else if (!want && has)
-                        player->RemoveAurasDueToSpell(event.GetPhaseSpell());
+                    if (uint32 spell = event.GetRealmWidePhaseSpell())
+                        SetAura(player, spell, running && event.IsRealmWide() &&
+                            event.IsRealmWidePhaseArea(player->GetMapId(), zoneId, areaId));
                 }
             }
 
             // Starts an event right away, skipping the notice and the player count.
-            bool ForceStart(Slot& slot, std::string& error)
+            bool ForceStart(Slot& slot, std::string& error, bool realmWide = false, std::string instigator = {})
             {
                 if (slot.state == State::Running)
                 {
@@ -285,15 +303,25 @@ namespace EraEvents
                     return false;
                 }
 
+                if (realmWide && !Settings(slot.event->GetType()).realmWide)
+                {
+                    error = "it has no realm-wide run (RealmWideMinutes is 0)";
+                    return false;
+                }
+
+                slot.event->SetRun(realmWide, std::move(instigator));
+
                 std::vector<Player*> cohort = GetCohort(slot.event->GetTier(), true);
                 if (slot.state == State::Idle && !slot.event->Prepare(cohort))
                 {
+                    slot.event->SetRun(false, {});
                     error = "it couldn't pick a place to happen";
                     return false;
                 }
 
                 if (!Begin(slot))
                 {
+                    slot.event->SetRun(false, {});
                     error = "nothing could be spawned, see the server log";
                     return false;
                 }
@@ -325,10 +353,10 @@ namespace EraEvents
                 _adoptions.emplace_back(summoner, summon);
             }
 
-            void QueueStart(EventType type)
+            void QueueStart(EventType type, bool realmWide = false, std::string instigator = {})
             {
                 std::lock_guard<std::mutex> lock(_queueLock);
-                _starts.push_back(type);
+                _starts.push_back({ type, realmWide, std::move(instigator) });
             }
 
         private:
@@ -345,7 +373,7 @@ namespace EraEvents
                 std::vector<std::pair<ObjectGuid, uint32>> deaths;
                 std::vector<std::pair<ObjectGuid, ObjectGuid>> adoptions;
                 std::vector<ObjectUse> uses;
-                std::vector<EventType> starts;
+                std::vector<StartRequest> starts;
                 {
                     std::lock_guard<std::mutex> lock(_queueLock);
                     deaths.swap(_deaths);
@@ -369,16 +397,63 @@ namespace EraEvents
                         if (slot.event && slot.state == State::Running && slot.event->IsSummon(guid))
                             slot.event->OnSummonDied(guid, entry);
 
-                for (EventType type : starts)
+                for (StartRequest& request : starts)
                 {
-                    Slot& slot = _slots[type];
-                    if (!slot.event || !IsAvailable(*slot.event) || slot.state == State::Running)
+                    Slot& slot = _slots[request.type];
+                    if (!slot.event || !IsAvailable(*slot.event))
                         continue;
 
+                    EraEvent& event = *slot.event;
+                    bool realmWide = request.realmWide && Settings(request.type).realmWide;
+
+                    if (slot.state == State::Running)
+                    {
+                        if (!realmWide)
+                            continue;
+
+                        if (event.IsRealmWide())
+                        {
+                            // Set off again while it runs: its time starts over.
+                            event.SetRun(true, std::move(request.instigator));
+                            slot.timer = RunTime(event);
+                            for (Player* player : GetAudience(event))
+                                Tell(player, StartText(event, slot.timer), true);
+                            continue;
+                        }
+
+                        // A run for the event's own era is going. The realm-wide one takes its place.
+                        event.Stop();
+                        slot.state = State::Idle;
+                    }
+
                     std::string error;
-                    if (!ForceStart(slot, error))
-                        LOG_WARN("module", "mod-era-events: couldn't start {}: {}", slot.event->GetName(), error);
+                    if (!ForceStart(slot, error, realmWide, std::move(request.instigator)))
+                        LOG_WARN("module", "mod-era-events: couldn't start {}: {}", event.GetName(), error);
                 }
+            }
+
+            static void SetAura(Player* player, uint32 spell, bool want)
+            {
+                bool has = player->HasAura(spell);
+                if (want && !has)
+                    player->CastSpell(player, spell, true);
+                else if (!want && has)
+                    player->RemoveAurasDueToSpell(spell);
+            }
+
+            int64 RunTime(EraEvent const& event) const
+            {
+                EventSettings const& s = Settings(event.GetType());
+                return int64(std::max<uint32>(1, event.IsRealmWide() ? s.realmWide : s.duration)) * MINUTE_MS;
+            }
+
+            // A realm-wide run is announced to players who know nothing about it, so it says how long.
+            static std::string StartText(EraEvent const& event, int64 timer)
+            {
+                std::string text = event.GetStartText();
+                if (event.IsRealmWide())
+                    text += Acore::StringFormat(" It lasts {}.", FormatMinutes(uint32(std::max<int64>(0, timer))));
+                return text;
             }
 
             void UpdateSlot(Slot& slot, uint32 diff)
@@ -388,6 +463,9 @@ namespace EraEvents
                 if (slot.state == State::Running)
                 {
                     event.Update(diff);
+                    if (event.TakeRewardDue())
+                        RewardParticipants(event, event.GetRewardText());
+
                     if (event.IsWon())
                     {
                         Finish(slot, true);
@@ -432,6 +510,7 @@ namespace EraEvents
                     return;
                 }
 
+                event.SetRun(false, {});
                 if (!event.Prepare(cohort))
                 {
                     slot.timer = retry;
@@ -465,13 +544,13 @@ namespace EraEvents
                 }
 
                 slot.state = State::Running;
-                slot.timer = int64(std::max<uint32>(1, Settings(event.GetType()).duration)) * MINUTE_MS;
-                for (Player* player : GetCohort(event.GetTier(), false))
-                    Tell(player, event.GetStartText(), true);
+                slot.timer = RunTime(event);
+                for (Player* player : GetAudience(event))
+                    Tell(player, StartText(event, slot.timer), true);
 
                 _phasesDirty = true;
                 RefreshAllPhases();
-                LOG_INFO("module", "mod-era-events: {} started", event.GetName());
+                LOG_INFO("module", "mod-era-events: {} started{}", event.GetName(), event.IsRealmWide() ? ", realm-wide" : "");
                 return true;
             }
 
@@ -483,11 +562,12 @@ namespace EraEvents
                     if (won)
                         RewardParticipants(event);
 
-                    for (Player* player : GetCohort(event.GetTier(), false))
+                    for (Player* player : GetAudience(event))
                         Tell(player, event.GetEndText(won), true);
                 }
 
                 event.Stop();
+                event.SetRun(false, {});
                 Reschedule(slot, RollInterval(event.GetType()));
                 RefreshAllPhases();
                 LOG_INFO("module", "mod-era-events: {} ended ({})", event.GetName(), won ? "won" : "lost or stopped");
@@ -506,7 +586,8 @@ namespace EraEvents
                         UpdatePlayerPhases(player, player->GetZoneId(), player->GetAreaId());
             }
 
-            void RewardParticipants(EraEvent const& event)
+            // text: also told to each of them, when there is any.
+            void RewardParticipants(EraEvent const& event, std::string const& text = {})
             {
                 EventSettings const& s = Settings(event.GetType());
                 FactionEntry const* faction = s.rewardFaction ? sFactionStore.LookupEntry(s.rewardFaction) : nullptr;
@@ -524,6 +605,9 @@ namespace EraEvents
 
                     if (s.rewardItem && s.rewardItemCount)
                         GiveItem(player, event, s.rewardItem, s.rewardItemCount);
+
+                    if (!text.empty())
+                        Tell(player, text, true);
                 }
             }
 
@@ -565,7 +649,14 @@ namespace EraEvents
                 Position pos;
             };
             std::vector<ObjectUse> _uses;
-            std::vector<EventType> _starts;
+
+            struct StartRequest
+            {
+                EventType type;
+                bool realmWide;
+                std::string instigator;
+            };
+            std::vector<StartRequest> _starts;
         };
 
         Manager& Mgr() { return Manager::Instance(); }
@@ -586,6 +677,7 @@ namespace EraEvents
             {
                 char const* name;
                 uint32 duration;
+                uint32 realmWide;
                 uint32 gold;
                 uint32 faction;
                 int32 reputation;
@@ -594,10 +686,10 @@ namespace EraEvents
             };
 
             std::array<Defaults, MAX_ERA_EVENTS> const defaults = {{
-                { "AQWar",             45, 20 * GOLD, 609, 250, 0,     0 }, // Cenarion Circle
-                { "ScourgeInvasion",   30, 15 * GOLD, 529, 250, 22484, 5 }, // Argent Dawn, Necrotic Runes
-                { "LegionIncursion",   30, 20 * GOLD, 529, 150, 0,     0 }, // Argent Dawn
-                { "ZombieInfestation", 30, 50 * GOLD, 529, 250, 0,     0 }, // Argent Dawn
+                { "AQWar",             45, 120, 20 * GOLD, 609, 250, 0,     0 }, // Cenarion Circle
+                { "ScourgeInvasion",   30, 0,   15 * GOLD, 529, 250, 22484, 5 }, // Argent Dawn, Necrotic Runes
+                { "LegionIncursion",   30, 0,   20 * GOLD, 529, 150, 0,     0 }, // Argent Dawn
+                { "ZombieInfestation", 30, 0,   50 * GOLD, 529, 250, 0,     0 }, // Argent Dawn
             }};
 
             for (uint8 i = 0; i < MAX_ERA_EVENTS; ++i)
@@ -611,6 +703,8 @@ namespace EraEvents
                 s.intervalMax = sConfigMgr->GetOption<uint32>(prefix + "IntervalMax", 240);
                 s.warning = sConfigMgr->GetOption<uint32>(prefix + "WarningMinutes", 10);
                 s.duration = sConfigMgr->GetOption<uint32>(prefix + "DurationMinutes", d.duration);
+                // Only the events with a realm-wide run have the key in the conf file.
+                s.realmWide = sConfigMgr->GetOption<uint32>(prefix + "RealmWideMinutes", d.realmWide, d.realmWide != 0);
                 s.rewardGold = sConfigMgr->GetOption<uint32>(prefix + "RewardGold", d.gold / GOLD) * GOLD;
                 s.rewardFaction = sConfigMgr->GetOption<uint32>(prefix + "RewardFaction", d.faction);
                 s.rewardReputation = sConfigMgr->GetOption<int32>(prefix + "RewardReputation", d.reputation);
@@ -665,6 +759,11 @@ namespace EraEvents
     void RequestStart(EventType type)
     {
         Mgr().QueueStart(type);
+    }
+
+    void RequestRealmWideStart(EventType type, std::string instigator)
+    {
+        Mgr().QueueStart(type, true, std::move(instigator));
     }
 
     // --- EraEvent -------------------------------------------------------------------------------
@@ -798,6 +897,13 @@ namespace EraEvents
         _objects.clear();
         _anchor.Clear();
         _map = nullptr;
+        _rewardDue = false;
+    }
+
+    void EraEvent::SetRun(bool realmWide, std::string instigator)
+    {
+        _realmWide = realmWide;
+        _instigator = std::move(instigator);
     }
 }
 
@@ -877,6 +983,17 @@ public:
         if (!player || !config.enabled)
             return false;
 
+        // A realm-wide run is everyone's, whatever their era.
+        for (Slot& running : Mgr().Slots())
+        {
+            if (!running.event || running.state != State::Running || !running.event->IsRealmWide())
+                continue;
+
+            handler->PSendSysMessage("{} is happening now, for every era, for another {}. {}", running.event->GetName(),
+                FormatMinutes(uint32(std::max<int64>(0, running.timer))), running.event->GetStartText());
+            return true;
+        }
+
         uint8 tier = GetPlayerTier(player);
         Slot* slot = Mgr().FindSlotForTier(tier);
         if (!slot || !Mgr().IsAvailable(*slot->event))
@@ -917,8 +1034,9 @@ public:
                 continue;
 
             EraEvent const& event = *slot.event;
-            handler->PSendSysMessage("{} ({}): tier {}, {}{}, next step in {}, {} real players at the tier online",
+            handler->PSendSysMessage("{} ({}): tier {}, {}{}{}, next step in {}, {} real players at the tier online",
                 event.GetName(), event.GetKey(), event.GetTier(), StateName(slot.state),
+                slot.state == State::Running && event.IsRealmWide() ? " realm-wide" : "",
                 Mgr().IsAvailable(event) ? "" : " (disabled)", FormatMinutes(uint32(std::max<int64>(0, slot.timer))),
                 Mgr().GetCohort(event.GetTier(), true).size());
         }
@@ -936,11 +1054,19 @@ public:
         return slot;
     }
 
-    static bool HandleStart(ChatHandler* handler, std::string key)
+    static bool HandleStart(ChatHandler* handler, std::string key, Optional<std::string> mode)
     {
         Slot* slot = FindOrComplain(handler, key);
         if (!slot)
             return false;
+
+        bool realmWide = mode && *mode == "realm";
+        if (mode && !realmWide)
+        {
+            handler->SendSysMessage("The only thing that can follow the event is \"realm\", for a realm-wide run.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
 
         if (!Mgr().IsAvailable(*slot->event))
         {
@@ -952,7 +1078,8 @@ public:
         }
 
         std::string error;
-        if (!Mgr().ForceStart(*slot, error))
+        Player* gm = handler->GetPlayer();
+        if (!Mgr().ForceStart(*slot, error, realmWide, gm ? gm->GetName() : "A Game Master"))
         {
             handler->PSendSysMessage("{} didn't start: {}.", slot->event->GetName(), error);
             handler->SetSentErrorMessage(true);
