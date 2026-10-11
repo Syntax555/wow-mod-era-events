@@ -47,10 +47,13 @@ and no minimum number of players:
   repeats until the two hours are over.
 - **The hives are open to all.** mod-individual-progression has a war of its own that only
   characters between the gong and *Chaos and Destruction* can see: the three Colossi at the hives,
-  the Anubisath and General Rajaxx at the gate, and Qiraji crystal camps in Silithus (level 60)
-  and Darkshore (level 16 to 20). For the two hours everyone sees them, so friends of any era and
-  level can help. The ringer still has to kill the Colossi to move on: the war ending doesn't do
-  that for them.
+  an Imperial Qiraji Destroyer and three Colossal Anubisath Warbringers at the gate, and Anubisath
+  camps in Silithus (level 62 and 63, each led by a Lieutenant General Nokhor of its own) and
+  Darkshore (level 16 to 20, led by Qiraji Officer Zod). For the two hours everyone sees them, so
+  friends of any era and level can help. The ringer still has to kill the Colossi to move on: the
+  war ending doesn't do that for them. The Resonating Crystal Formations the camps stand around
+  are the one thing that stays with the characters of the era: IP shows those by script, not by
+  phase.
 
 A second gong while the war runs starts the two hours over. `.era next` tells anyone how long is
 left. `EraEvents.AQWar.RealmWideMinutes` sets the length, and 0 turns the war off: the gong then
