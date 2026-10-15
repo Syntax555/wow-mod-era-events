@@ -38,7 +38,7 @@ namespace EraEvents
     // For creatures using the generic AI (ScriptName npc_era_event_mob).
     struct MobDef
     {
-        std::vector<TimedSpell> spells;
+        std::vector<TimedSpell> spells = {};
         uint32 aura = 0;        // kept on the creature out of combat too
         uint32 spawnVisual = 0; // cast once when it appears
         uint32 deathSpell = 0;
