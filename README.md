@@ -1,3 +1,22 @@
+## Portable assembly integration
+
+This **Era Events** fork is maintained for
+[AzerothCore Playerbots Portable](https://github.com/Syntax555/mod-playerbots-portable/blob/main/README.md). Its original upstream is
+[buildthehomelab/wow-mod-era-events](https://github.com/buildthehomelab/wow-mod-era-events), imported at
+[`cf02786aceb5`](https://github.com/buildthehomelab/wow-mod-era-events/commit/cf02786aceb531df76ff065d8be7a1973344cfb1).
+The assembly pins a tested commit of this fork's `main` branch in
+[`versions.lock.json`](https://github.com/Syntax555/mod-playerbots-portable/blob/main/versions.lock.json), together with its matching core and modules.
+
+Use the assembly's [installation and build instructions](https://github.com/Syntax555/mod-playerbots-portable/blob/main/README.md),
+[module catalog](https://github.com/Syntax555/mod-playerbots-portable/blob/main/docs/module-versions.md#server-modules) and
+[Outdoor era events](https://github.com/Syntax555/mod-playerbots-portable/blob/main/docs/world-events.md). Before contributing, read its
+[repository rules](https://github.com/Syntax555/mod-playerbots-portable/blob/main/AGENTS.md) and [fork workflow](https://github.com/Syntax555/mod-playerbots-portable/blob/main/CONTRIBUTING.md#changing-the-server).
+The **Portable integration** workflow checks this fork's current commit against
+the assembly's pinned dependencies with the relevant production fixtures.
+
+---
+
+
 # Era Events
 
 An [AzerothCore](https://www.azerothcore.org/) (WotLK 3.3.5a) module that brings back the iconic
