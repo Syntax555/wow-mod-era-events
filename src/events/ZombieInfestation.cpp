@@ -21,6 +21,7 @@
 #include "CreatureAI.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
+#include "GameTime.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "ObjectAccessor.h"
@@ -108,7 +109,8 @@ namespace EraEvents
 
         void Infect(Player* player)
         {
-            if (player->IsGameMaster() || !player->IsAlive() || IsZombie(player) || player->HasAura(SPELL_YOURE_INFECTED))
+            if (!IsEventParticipant(player, EVENT_ZOMBIE_INFESTATION) || player->IsGameMaster() ||
+                !player->IsAlive() || IsZombie(player) || player->HasAura(SPELL_YOURE_INFECTED))
                 return;
 
             player->AddAura(SPELL_YOURE_INFECTED, player);
@@ -186,7 +188,6 @@ namespace EraEvents
 
                 _raiseTimer = 5 * IN_MILLISECONDS;
                 _checkTimer = CHECK_MS;
-                _infected.clear();
                 return !_crates.empty();
             }
 
@@ -234,7 +235,6 @@ namespace EraEvents
                     if (player && player->IsInWorld())
                         StripPlague(player);
 
-                _infected.clear();
                 _crates.clear();
             }
 
@@ -263,44 +263,36 @@ namespace EraEvents
             // Infections running out, healers at work, and the zombies who died.
             void CheckPlayers()
             {
-                Map* map = GetMap();
                 std::list<Creature*> healers;
                 if (Creature* anchor = GetAnchor())
                     anchor->GetCreatureListWithEntryInGrid(healers, NPC_ARGENT_HEALER, 60.0f);
 
                 for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
                 {
-                    if (!player || !player->IsInWorld() || player->GetMap() != map || !player->HasAura(GetPhaseSpell()))
+                    if (!player || !player->IsInWorld())
                         continue;
 
-                    if (!player->IsAlive())
+                    if (!IsEventParticipant(player, EVENT_ZOMBIE_INFESTATION) || !player->IsAlive())
                     {
                         StripPlague(player);
-                        _infected.erase(guid);
                         continue;
                     }
 
-                    if (!player->HasAura(SPELL_YOURE_INFECTED))
-                    {
-                        _infected.erase(guid);
+                    Aura* infection = player->GetAura(SPELL_YOURE_INFECTED);
+                    if (!infection)
                         continue;
-                    }
 
                     if (Creature* healer = NearestHealer(healers, player))
                     {
                         healer->CastSpell(player, SPELL_CURE_INFECTION, true);
                         player->RemoveAurasDueToSpell(SPELL_YOURE_INFECTED);
-                        _infected.erase(guid);
                         TellPlayer(player, "The Argent Healer burns the plague out of you.");
                         continue;
                     }
 
-                    uint32& elapsed = _infected[guid];
-                    elapsed += CHECK_MS;
-                    if (elapsed < INFECTION_MS)
+                    if (GameTime::GetGameTime().count() - infection->GetApplyTime() < INFECTION_MS / IN_MILLISECONDS)
                         continue;
 
-                    _infected.erase(guid);
                     player->RemoveAurasDueToSpell(SPELL_YOURE_INFECTED);
                     SetTimed(player->AddAura(SPELL_YOURE_A_ZOMBIE, player), ZOMBIE_MS);
                     SetTimed(player->AddAura(SPELL_ZOMBIE_FACTION, player), ZOMBIE_MS);
@@ -319,7 +311,6 @@ namespace EraEvents
 
             uint32 _city = 0;
             std::unordered_map<ObjectGuid, Position> _crates;
-            std::unordered_map<ObjectGuid, uint32> _infected; // ms since infected
             uint32 _raiseTimer = 0;
             uint32 _checkTimer = 0;
         };
@@ -328,6 +319,12 @@ namespace EraEvents
     std::unique_ptr<EraEvent> CreateZombieInfestationEvent()
     {
         return std::make_unique<ZombieInfestationEvent>();
+    }
+
+    void ClearZombieInfection(Player* player)
+    {
+        if (player)
+            StripPlague(player);
     }
 }
 
@@ -340,6 +337,9 @@ struct go_era_plagued_crate : public GameObjectAI
 
     bool GossipHello(Player* player, bool /*reportUse*/) override
     {
+        if (!IsEventParticipant(player, EVENT_ZOMBIE_INFESTATION))
+            return true;
+
         if (me->isSpawned())
         {
             NotifyObjectUsed(me);
@@ -358,7 +358,8 @@ class spell_era_beckoning_groan : public SpellScript
     void HandleAfterCast()
     {
         Unit* caster = GetCaster();
-        if (!caster || !caster->IsPlayer() || !IsZombie(caster))
+        if (!caster || !caster->IsPlayer() || !IsZombie(caster) ||
+            !IsEventParticipant(caster->ToPlayer(), EVENT_ZOMBIE_INFESTATION))
             return;
 
         std::list<Player*> players;
@@ -374,6 +375,25 @@ class spell_era_beckoning_groan : public SpellScript
     void Register() override
     {
         AfterCast += SpellCastFn(spell_era_beckoning_groan::HandleAfterCast);
+    }
+};
+
+class EraEventsZombiePlayerScript : public PlayerScript
+{
+public:
+    EraEventsZombiePlayerScript() : PlayerScript("EraEventsZombiePlayerScript", {
+        PLAYERHOOK_ON_LOGIN,
+        PLAYERHOOK_ON_BEFORE_LOGOUT,
+    }) { }
+
+    void OnPlayerLogin(Player* player) override
+    {
+        ClearZombieInfection(player);
+    }
+
+    void OnPlayerBeforeLogout(Player* player) override
+    {
+        ClearZombieInfection(player);
     }
 };
 
@@ -396,4 +416,5 @@ void AddEraEventZombieScripts()
 
     RegisterGameObjectAI(go_era_plagued_crate);
     RegisterSpellScript(spell_era_beckoning_groan);
+    new EraEventsZombiePlayerScript();
 }

@@ -34,6 +34,7 @@
 #include "DatabaseEnv.h"
 #include "GameObject.h"
 #include "Item.h"
+#include "IndividualProgression.h"
 #include "Log.h"
 #include "Mail.h"
 #include "Map.h"
@@ -206,7 +207,8 @@ namespace EraEvents
 
             bool IsAvailable(EraEvent const& event) const
             {
-                if (!config.enabled || !config.ipEnabled || !Settings(event.GetType()).enabled)
+                if (!config.enabled || !config.ipEnabled || !Settings(event.GetType()).enabled ||
+                    !sIndividualProgression->IsStrictDefaultProgression())
                     return false;
 
                 // An era IP never lets anyone reach.
@@ -271,27 +273,35 @@ namespace EraEvents
                 }
             }
 
+            bool IsEventParticipant(Player* player, EventType type, uint32 zoneId, uint32 areaId) const
+            {
+                Slot const& slot = _slots[type];
+                return player && player->IsInWorld() && slot.event && slot.state == State::Running &&
+                    IsAvailable(*slot.event) && GetPlayerTier(player) == slot.event->GetTier() &&
+                    slot.event->IsEventArea(player->GetMapId(), zoneId, areaId);
+            }
+
             void UpdatePlayerPhases(Player* player, uint32 zoneId, uint32 areaId)
             {
                 if (!player || !player->IsInWorld())
                     return;
 
-                uint8 tier = GetPlayerTier(player);
                 for (Slot const& slot : _slots)
                 {
                     if (!slot.event)
                         continue;
 
                     EraEvent const& event = *slot.event;
-                    bool running = slot.state == State::Running;
-                    bool want = running && (event.IsRealmWide() || tier == event.GetTier()) &&
-                        event.IsEventArea(player->GetMapId(), zoneId, areaId);
+                    bool want = IsEventParticipant(player, event.GetType(), zoneId, areaId);
                     SetAura(player, event.GetPhaseSpell(), want);
 
                     if (uint32 spell = event.GetRealmWidePhaseSpell())
-                        SetAura(player, spell, running && event.IsRealmWide() &&
+                        SetAura(player, spell, want && event.IsRealmWide() &&
                             event.IsRealmWidePhaseArea(player->GetMapId(), zoneId, areaId));
                 }
+
+                if (!IsEventParticipant(player, EVENT_ZOMBIE_INFESTATION, zoneId, areaId))
+                    ClearZombieInfection(player);
             }
 
             // Starts an event right away, skipping the notice and the player count.
@@ -460,6 +470,13 @@ namespace EraEvents
             {
                 EraEvent& event = *slot.event;
 
+                if (!IsAvailable(event))
+                {
+                    if (slot.state != State::Idle)
+                        ForceStop(slot);
+                    return;
+                }
+
                 if (slot.state == State::Running)
                 {
                     event.Update(diff);
@@ -536,6 +553,9 @@ namespace EraEvents
             bool Begin(Slot& slot)
             {
                 EraEvent& event = *slot.event;
+                if (!IsAvailable(event))
+                    return false;
+
                 if (!event.Start())
                 {
                     LOG_ERROR("module", "mod-era-events: {} failed to spawn", event.GetName());
@@ -710,6 +730,15 @@ namespace EraEvents
                 s.rewardReputation = sConfigMgr->GetOption<int32>(prefix + "RewardReputation", d.reputation);
                 s.rewardItem = sConfigMgr->GetOption<uint32>(prefix + "RewardItem", d.item);
                 s.rewardItemCount = sConfigMgr->GetOption<uint32>(prefix + "RewardItemCount", d.itemCount);
+
+                // Events require the strict default chain. Clamp independently of IP's
+                // config hook order: zone presence earns neither access nor rewards.
+                s.realmWide = 0;
+                s.rewardGold = 0;
+                s.rewardFaction = 0;
+                s.rewardReputation = 0;
+                s.rewardItem = 0;
+                s.rewardItemCount = 0;
             }
 
             if (config.enabled && !config.ipEnabled)
@@ -721,15 +750,22 @@ namespace EraEvents
 
     uint8 GetPlayerTier(Player* player)
     {
-        if (!config.ipEnabled || !player)
-            return 0;
+        if (!config.ipEnabled || !player || !player->IsInWorld() ||
+            !sIndividualProgression->IsStrictDefaultProgression())
+            return 255;
 
-        // Same walk as IndividualProgression::GetPlayerProgressionFromQuests.
-        uint8 state = 0;
-        for (uint8 i = 1; i <= IP_STATE_MAX; ++i)
-            if (player->GetQuestStatus(IP_PROGRESSION_QUEST_BASE + i) == QUEST_STATUS_REWARDED)
-                state = i;
+        uint8 state = sIndividualProgression->GetPlayerProgressionFromQuests(player);
+        if (state > IP_STATE_MAX)
+            return 255;
+
+        if (sIndividualProgression->progressionLimit > 0)
+            state = uint8(std::min<int>(state, sIndividualProgression->progressionLimit));
         return state;
+    }
+
+    bool IsEventParticipant(Player* player, EventType type)
+    {
+        return player && Mgr().IsEventParticipant(player, type, player->GetZoneId(), player->GetAreaId());
     }
 
     bool IsRealPlayer(Player* player)

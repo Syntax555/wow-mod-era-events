@@ -25,8 +25,6 @@ class TempSummon;
 
 namespace EraEvents
 {
-    // mod-individual-progression keeps a player's progress as rewarded quests 66000 + state.
-    constexpr uint32 IP_PROGRESSION_QUEST_BASE = 66000;
     constexpr uint8 IP_STATE_MAX = 18;
 
     enum EventType : uint8
@@ -157,8 +155,10 @@ namespace EraEvents
     std::unique_ptr<EraEvent> CreateLegionIncursionEvent();
     std::unique_ptr<EraEvent> CreateZombieInfestationEvent();
 
-    // The IP state a player is at, 0 if IP is off.
+    // The realm-clamped IP state, 255 when the earned progression policy is unavailable.
     uint8 GetPlayerTier(Player* player);
+    bool IsEventParticipant(Player* player, EventType type);
+    void ClearZombieInfection(Player* player);
 
     // False for playerbots and GMs: they never count towards the players an event needs.
     bool IsRealPlayer(Player* player);

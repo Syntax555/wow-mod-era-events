@@ -120,6 +120,9 @@ struct npc_era_event_mob : public ScriptedAI
         if (!_def || !_def->hitAura || damageType != DIRECT_DAMAGE || !victim || !victim->IsPlayer())
             return;
 
+        if (!IsEventParticipant(victim->ToPlayer(), EVENT_ZOMBIE_INFESTATION))
+            return;
+
         if (victim->HasAura(_def->hitAura) || (_def->hitAuraBlocker && victim->HasAura(_def->hitAuraBlocker)))
             return;
 
