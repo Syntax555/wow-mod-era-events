@@ -49,6 +49,13 @@
 #include "World.h"
 #include "WorldSession.h"
 
+// A core with home screens keeps a character row per account that nobody plays. Other cores have none.
+#if __has_include("HomeViewer.h")
+#include "HomeViewer.h"
+#else
+inline bool IsHomeViewer(Player const*) { return false; }
+#endif
+
 #include <algorithm>
 #include <mutex>
 #include <type_traits>
@@ -220,7 +227,7 @@ namespace EraEvents
                 std::vector<Player*> cohort;
                 for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
                 {
-                    if (!player || !player->IsInWorld())
+                    if (!player || !player->IsInWorld() || IsHomeViewer(player))
                         continue;
 
                     if (realOnly && !IsRealPlayer(player))
@@ -240,7 +247,7 @@ namespace EraEvents
 
                 std::vector<Player*> audience;
                 for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
-                    if (player && player->IsInWorld())
+                    if (player && player->IsInWorld() && !IsHomeViewer(player))
                         audience.push_back(player);
                 return audience;
             }
@@ -283,7 +290,7 @@ namespace EraEvents
 
             void UpdatePlayerPhases(Player* player, uint32 zoneId, uint32 areaId)
             {
-                if (!player || !player->IsInWorld())
+                if (!player || !player->IsInWorld() || IsHomeViewer(player))
                     return;
 
                 for (Slot const& slot : _slots)
@@ -771,7 +778,7 @@ namespace EraEvents
     bool IsRealPlayer(Player* player)
     {
         WorldSession* session = player ? player->GetSession() : nullptr;
-        return session && !IsBotSession(session) && !player->IsGameMaster();
+        return session && !IsBotSession(session) && !player->IsGameMaster() && !IsHomeViewer(player);
     }
 
     void NotifyCreatureDied(Creature* creature)
