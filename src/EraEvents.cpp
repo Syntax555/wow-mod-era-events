@@ -507,7 +507,7 @@ namespace EraEvents
                         TryAnnounce(slot);
                         break;
                     case State::Warning:
-                        if (!Begin(slot))
+                        if (GetCohort(event.GetTier(), true).size() < config.minRealPlayers || !Begin(slot))
                             Reschedule(slot, int64(config.retry) * MINUTE_MS);
                         break;
                     case State::Running:
